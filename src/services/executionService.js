@@ -83,6 +83,26 @@ export async function getExecution(execution_id) {
   });
 }
 
+/**
+ * Tenant-safe execution lookup.
+ * Ensures the execution belongs to a site owned by the tenant.
+ */
+export async function getExecutionForTenant(execution_id, tenant_id) {
+  if (!tenant_id) return null;
+  return withClient(async (c) => {
+    const r = await c.query(
+      `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.status, e.progress,
+              e.result_payload, e.error_payload, e.request_payload, e.started_at, e.ended_at
+       FROM public.optimization_executions e
+       JOIN public.sites s ON s.id = e.site_id
+       WHERE e.execution_id=$1 AND s.tenant_id=$2
+       LIMIT 1`,
+      [execution_id, tenant_id]
+    );
+    return r.rows[0] || null;
+  });
+}
+
 export async function upsertOptimizationResult(execution_id, site_id, row) {
   return withClient(async (c) => {
     await c.query(

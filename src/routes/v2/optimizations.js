@@ -6,6 +6,7 @@ import {
   makeExecutionId,
   createExecution,
   getExecution,
+  getExecutionForTenant,
   setExecutionStatus,
   setExecutionProgress,
   markExecutionDone,
@@ -19,6 +20,42 @@ import { runPrepare } from '../../engine/prepareRunner.js';
 const r = Router();
 
 const SYNC_LIMIT = Number(process.env.SYNC_LIMIT || 50);
+
+/**
+ * GET /v2/executions/:execution_id
+ * Poll the execution status (queued/running/done/failed).
+ */
+r.get('/executions/:execution_id', async (req, res, next) => {
+  try {
+    const tenant_id = req.ctx?.tenant_id;
+    const { execution_id } = req.params;
+
+    const row = await getExecutionForTenant(execution_id, tenant_id);
+    if (!row) {
+      return res.status(404).json({
+        ok: false,
+        error: { code: 'not_found', message: 'Execution not found' }
+      });
+    }
+
+    const base = {
+      ok: true,
+      execution_id: row.execution_id,
+      status: row.status,
+      progress: row.progress ?? 0
+    };
+
+    if (row.status === 'done') {
+      return res.json({ ...base, result: row.result_payload });
+    }
+    if (row.status === 'failed') {
+      return res.json({ ...base, error: row.error_payload || { code: 'failed' } });
+    }
+    return res.json(base);
+  } catch (e) {
+    return next(e);
+  }
+});
 
 r.post('/optimizations/prepare',
   validateBody('https://innovia360.dev/schemas/v2/optimizations-prepare-request.schema.json'),
