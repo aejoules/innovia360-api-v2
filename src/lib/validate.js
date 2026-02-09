@@ -5,12 +5,22 @@ import { buildAjv } from './ajv.js';
 const ajv = buildAjv();
 
 export function loadSchemas(dirAbsPath) {
-  const files = fs.readdirSync(dirAbsPath).filter((f) => f.endsWith('.json'));
+  const files = fs
+    .readdirSync(dirAbsPath)
+    .filter((f) => f.endsWith('.schema.json'));
+
+  if (!files.length) {
+    throw new Error(`No schemas found in: ${dirAbsPath}`);
+  }
   for (const file of files) {
     const schema = JSON.parse(fs.readFileSync(path.join(dirAbsPath, file), 'utf-8'));
     if (!schema.$id) throw new Error(`Schema missing $id: ${file}`);
     ajv.addSchema(schema, schema.$id);
   }
+
+  // Useful startup visibility on Render
+  // eslint-disable-next-line no-console
+  console.log(`[schemas] loaded ${files.length} schemas from ${dirAbsPath}`);
 }
 
 export function validateBody(schemaId) {

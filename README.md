@@ -57,7 +57,8 @@ Environment variables:
 
 ## Local dev
 ```bash
-npm ci
+# Use npm ci only if you have a package-lock.json committed.
+npm install
 export DATABASE_URL=postgres://...
 export REDIS_URL=redis://...
 npm run dev

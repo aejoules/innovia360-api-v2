@@ -8,9 +8,6 @@ import { loadSchemas } from './lib/validate.js';
 import { migrate } from './lib/migrate.js';
 import { requireApiKey } from './lib/auth.js';
 import { apiRateLimit } from './lib/rateLimit.js';
-import inventoryRouter from './routes/v2/inventory.js';
-import optimizationsRouter from './routes/v2/optimizations.js';
-import scanRouter from './routes/v2/scan.js';
 import { pingDb } from './lib/db.js';
 
 const app = express();
@@ -22,6 +19,10 @@ app.use(httpLogger);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// IMPORTANT (ESM): routes import-time validation requires schemas to be loaded
+// BEFORE routers are imported. We therefore load schemas first, then dynamically
+// import routers after.
 loadSchemas(path.resolve(__dirname, './schemas/v2'));
 
 if ((process.env.MIGRATE_ON_BOOT || 'true') === 'true') {
@@ -38,6 +39,11 @@ app.get('/health', async (_req, res) => {
 
 // Auth + rate limit for v2
 app.use('/v2', apiRateLimit(), requireApiKey());
+
+// Routers are imported after schemas are loaded (ESM import order)
+const { default: inventoryRouter } = await import('./routes/v2/inventory.js');
+const { default: optimizationsRouter } = await import('./routes/v2/optimizations.js');
+const { default: scanRouter } = await import('./routes/v2/scan.js');
 
 app.use('/v2', inventoryRouter);
 app.use('/v2', optimizationsRouter);

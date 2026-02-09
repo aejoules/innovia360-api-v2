@@ -3,7 +3,8 @@ services:
     name: innovia360-api-v2
     env: node
     plan: starter
-    buildCommand: npm ci
+    # NOTE: Use npm install unless you commit package-lock.json (then you can switch back to npm ci)
+    buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -31,13 +32,14 @@ services:
     name: innovia360-api-v2-worker
     env: node
     plan: starter
-    buildCommand: npm ci
+    # NOTE: Use npm install unless you commit package-lock.json (then you can switch back to npm ci)
+    buildCommand: npm install
     startCommand: npm run worker
     envVars:
       - key: NODE_ENV
         value: production
       - key: MIGRATE_ON_BOOT
-        value: "true"
+        value: "false"
       - key: SCAN_CONCURRENCY
         value: "2"
       - key: EXECUTION_CONCURRENCY
