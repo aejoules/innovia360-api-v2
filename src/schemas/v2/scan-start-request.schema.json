@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/scan-start-request.schema.json",
+  "title": "ScanStartRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site_url",
+    "type",
+    "scope"
+  ],
+  "properties": {
+    "site_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "scan_1",
+        "scan_2_before",
+        "scan_2_after"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_types"
+      ],
+      "properties": {
+        "entity_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "product",
+              "variation",
+              "post",
+              "page"
+            ]
+          }
+        },
+        "lang": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          }
+        }
+      }
+    },
+    "execution_ref": {
+      "type": "string",
+      "minLength": 10
+    }
+  }
+}

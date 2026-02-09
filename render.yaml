@@ -1,0 +1,61 @@
+services:
+  - type: web
+    name: innovia360-api-v2
+    env: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIGRATE_ON_BOOT
+        value: "true"
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: RATE_LIMIT_RPM
+        value: "120"
+      - key: SYNC_LIMIT
+        value: "50"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: innovia360-v2-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: innovia360-v2-redis
+          type: redis
+          property: connectionString
+
+  - type: worker
+    name: innovia360-api-v2-worker
+    env: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIGRATE_ON_BOOT
+        value: "true"
+      - key: SCAN_CONCURRENCY
+        value: "2"
+      - key: EXECUTION_CONCURRENCY
+        value: "2"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: innovia360-v2-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: innovia360-v2-redis
+          type: redis
+          property: connectionString
+
+  - type: redis
+    name: innovia360-v2-redis
+    plan: starter
+
+databases:
+  - name: innovia360-v2-db
+    plan: starter

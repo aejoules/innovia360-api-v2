@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/apply-payload-response.schema.json",
+  "title": "ApplyPayloadResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "execution",
+    "summary",
+    "results"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "const": true
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "cms": {
+          "type": "string",
+          "const": "wordpress"
+        },
+        "connector_target": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "yoast",
+            "rankmath"
+          ]
+        },
+        "ruleset": {
+          "type": "string"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "started_at",
+        "ended_at",
+        "mode"
+      ],
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "minLength": 10
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "prepare_only"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities_total",
+        "entities_ready",
+        "entities_skipped"
+      ],
+      "properties": {
+        "entities_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entities_ready": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entities_skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimated_impact": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ctr": {
+              "type": "string"
+            },
+            "position": {
+              "type": "string"
+            },
+            "impressions": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ApplyEntity"
+      }
+    }
+  },
+  "$defs": {
+    "LangCode": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "PublicSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "scanned_at",
+        "http_status"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "scanned_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "http_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        }
+      }
+    },
+    "Decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "risk",
+        "reason"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "update",
+            "skip"
+          ]
+        },
+        "risk": {
+          "type": "string",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "CoreFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "post_title": {
+          "type": "string"
+        },
+        "post_excerpt": {
+          "type": "string"
+        },
+        "post_content": {
+          "type": "string"
+        }
+      }
+    },
+    "SeoFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "meta_description": {
+          "type": "string"
+        },
+        "focus_keyword": {
+          "type": "string"
+        },
+        "robots": {
+          "type": "string"
+        },
+        "canonical": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "BeforeAfter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core",
+        "seo"
+      ],
+      "properties": {
+        "core": {
+          "$ref": "#/$defs/CoreFields"
+        },
+        "seo": {
+          "$ref": "#/$defs/SeoFields"
+        }
+      }
+    },
+    "DiffMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "core": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "seo": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      }
+    },
+    "ApplyInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "write_targets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "core",
+              "seo"
+            ]
+          }
+        }
+      }
+    },
+    "ApplyEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wp_id",
+        "entity_type",
+        "post_type",
+        "status",
+        "lang",
+        "decision",
+        "apply"
+      ],
+      "properties": {
+        "wp_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "product",
+            "variation",
+            "post",
+            "page"
+          ]
+        },
+        "post_type": {
+          "type": "string",
+          "enum": [
+            "product",
+            "product_variation",
+            "post",
+            "page"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "publish",
+            "draft",
+            "private",
+            "pending",
+            "future",
+            "trash"
+          ]
+        },
+        "lang": {
+          "$ref": "#/$defs/LangCode"
+        },
+        "public_source": {
+          "$ref": "#/$defs/PublicSource"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "before": {
+          "$ref": "#/$defs/BeforeAfter"
+        },
+        "after": {
+          "$ref": "#/$defs/BeforeAfter"
+        },
+        "diff": {
+          "$ref": "#/$defs/DiffMap"
+        },
+        "apply": {
+          "$ref": "#/$defs/ApplyInfo"
+        }
+      }
+    }
+  }
+}
