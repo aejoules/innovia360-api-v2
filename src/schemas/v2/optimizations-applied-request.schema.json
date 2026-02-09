@@ -214,11 +214,21 @@
               }
             }
           },
-          "then": {
-            "required": [
-              "error"
-            ]
-          }
+   "then": {
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  },
+  "required": ["error"]
+}
+
         },
         {
           "if": {
