@@ -29,7 +29,7 @@ const FORCE_ASYNC_PREPARE = String(process.env.FORCE_ASYNC_PREPARE || '').toLowe
  * GET /v2/executions/:execution_id
  * Poll the execution status (queued/running/done/failed).
  */
-r.get('/executions/:execution_id', async (req, res, next) => {
+const getExecutionHandler = async (req, res, next) => {
   try {
     const tenant_id = req.ctx?.tenant_id;
     const { execution_id } = req.params;
@@ -59,7 +59,10 @@ r.get('/executions/:execution_id', async (req, res, next) => {
   } catch (e) {
     return next(e);
   }
-});
+};
+
+r.get('/executions/:execution_id', getExecutionHandler);
+r.get('/optimizations/executions/:execution_id', getExecutionHandler);
 
 r.post('/optimizations/prepare',
   validateBody('https://innovia360.dev/schemas/v2/optimizations-prepare-request.schema.json'),
@@ -119,7 +122,7 @@ r.post('/optimizations/prepare',
           status: 'queued',
           progress: 0,
           links: {
-            poll: `/v2/executions/${execution_id}`
+            poll: `/v2/optimizations/executions/${execution_id}`
           }
         });
       }
