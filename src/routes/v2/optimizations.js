@@ -100,7 +100,18 @@ r.post('/optimizations/prepare',
 
       if (shouldAsync) {
         const q = getExecutionQueue();
-        await q.add('execution_prepare', { execution_id }, { attempts: 2 });
+
+        // Fire-and-forget enqueue to avoid hanging the HTTP request when Redis/queue
+        // is slow or temporarily unavailable (WordPress will otherwise timeout).
+        // We still return execution_id immediately; the execution will move to
+        // 'running' once the worker picks it up. If enqueue fails, we mark it failed.
+        Promise.resolve()
+          .then(() => q.add('execution_prepare', { execution_id }, { attempts: 2 }))
+          .catch(async (err) => {
+            try {
+              await setExecutionStatus(execution_id, 'failed', 0, String(err?.message || err || 'enqueue_failed'));
+            } catch (_) {}
+          });
 
         return res.status(202).json({
           ok: true,
