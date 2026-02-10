@@ -80,6 +80,7 @@ async function doExecutionPrepare(execution_id) {
     ruleset: ex.ruleset,
     inventory,
     site_samples: req.site_samples || [],
+    focus_keyword: req.focus_keyword || null,
     onProgress: async (done, total) => {
       const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
       await setExecutionProgress(execution_id, p);

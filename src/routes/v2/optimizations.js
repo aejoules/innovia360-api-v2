@@ -132,6 +132,7 @@ r.post('/optimizations/prepare',
         ruleset,
         inventory,
         site_samples,
+        focus_keyword,
         onProgress: async (done, total) => {
           const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
           await setExecutionProgress(execution_id, p);
