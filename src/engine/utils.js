@@ -43,3 +43,15 @@ export function scoreFromSignals(sig) {
   score = Math.max(0, Math.min(100, score));
   return { score, issues };
 }
+
+/**
+ * Convenience helper: score with partial field overrides.
+ * Useful to estimate "after" score without re-crawling the page.
+ */
+export function scoreFromSignalsWithOverrides(sig, overrides = {}) {
+  const merged = {
+    ...(sig || {}),
+    ...(overrides || {})
+  };
+  return scoreFromSignals(merged);
+}

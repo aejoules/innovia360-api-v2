@@ -62,7 +62,7 @@ r.post('/optimizations/prepare',
   async (req, res, next) => {
     try {
       const tenant_id = req.ctx?.tenant_id;
-      const { site_url, ruleset, scope, filters = {} } = req.body;
+      const { site_url, ruleset, scope, filters = {}, site_samples = [], focus_keyword = null } = req.body;
 
       const site = await getSiteByUrl(tenant_id, site_url);
       if (!site) {
@@ -72,7 +72,10 @@ r.post('/optimizations/prepare',
         });
       }
 
-      const inventory = await loadInventorySlice(site.id, scope, filters);
+      const rawInventory = await loadInventorySlice(site.id, scope, filters);
+      const inventory = (focus_keyword && typeof focus_keyword === 'string')
+        ? rawInventory.map((it) => ({ ...it, focus_keyword }))
+        : rawInventory;
       const execution_id = makeExecutionId();
 
       // Create execution record
@@ -108,6 +111,7 @@ r.post('/optimizations/prepare',
         site_url,
         ruleset,
         inventory,
+        site_samples,
         onProgress: async (done, total) => {
           const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
           await setExecutionProgress(execution_id, p);

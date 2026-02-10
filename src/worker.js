@@ -68,7 +68,10 @@ async function doExecutionPrepare(execution_id) {
   const req = ex.request_payload || {};
   const scope = req.scope || {};
   const filters = req.filters || {};
-  const inventory = await loadInventorySlice(ex.site_id, scope, filters);
+  const rawInventory = await loadInventorySlice(ex.site_id, scope, filters);
+  const inventory = (req.focus_keyword && typeof req.focus_keyword === 'string')
+    ? rawInventory.map((it) => ({ ...it, focus_keyword: req.focus_keyword }))
+    : rawInventory;
 
   await setExecutionStatus(execution_id, 'running', 1);
 
@@ -76,6 +79,7 @@ async function doExecutionPrepare(execution_id) {
     site_url: req.site_url || site.site_url,
     ruleset: ex.ruleset,
     inventory,
+    site_samples: req.site_samples || [],
     onProgress: async (done, total) => {
       const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
       await setExecutionProgress(execution_id, p);

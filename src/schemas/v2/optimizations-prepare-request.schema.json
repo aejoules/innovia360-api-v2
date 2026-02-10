@@ -88,6 +88,20 @@
     "ruleset": {
       "type": "string",
       "minLength": 1
+    },
+    "focus_keyword": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "site_samples": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "maxLength": 2000
+      }
     }
   }
 }
