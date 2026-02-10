@@ -20,6 +20,10 @@ import { runPrepare } from '../../engine/prepareRunner.js';
 const r = Router();
 
 const SYNC_LIMIT = Number(process.env.SYNC_LIMIT || 50);
+// /v2/optimizations/prepare can involve crawling + AI calls and can exceed typical
+// reverse-proxy/PHP timeouts (especially when called from WordPress). To avoid
+// request timeouts, support an async-first mode.
+const FORCE_ASYNC_PREPARE = String(process.env.FORCE_ASYNC_PREPARE || '').toLowerCase() === 'true';
 
 /**
  * GET /v2/executions/:execution_id
@@ -78,6 +82,11 @@ r.post('/optimizations/prepare',
         : rawInventory;
       const execution_id = makeExecutionId();
 
+      // Async-first: anything non-quick (AI / richer processing) should run in worker
+      // to avoid request timeouts from WordPress/PHP/reverse proxies.
+      const rulesetName = String(ruleset || '').toLowerCase();
+      const shouldAsync = FORCE_ASYNC_PREPARE || (inventory.length > SYNC_LIMIT) || (rulesetName !== 'quick_boost');
+
       // Create execution record
       await createExecution({
         execution_id,
@@ -85,11 +94,11 @@ r.post('/optimizations/prepare',
         ruleset,
         connector_target: 'auto',
         request_payload: req.body,
-        status: (inventory.length > SYNC_LIMIT) ? 'queued' : 'running',
-        progress: (inventory.length > SYNC_LIMIT) ? 0 : 1
+        status: shouldAsync ? 'queued' : 'running',
+        progress: shouldAsync ? 0 : 1
       });
 
-      if (inventory.length > SYNC_LIMIT) {
+      if (shouldAsync) {
         const q = getExecutionQueue();
         await q.add('execution_prepare', { execution_id }, { attempts: 2 });
 
@@ -104,7 +113,7 @@ r.post('/optimizations/prepare',
         });
       }
 
-      // Sync path
+      // Sync path (deterministic only)
       await setExecutionStatus(execution_id, 'running', 1);
 
       const results = await runPrepare({
