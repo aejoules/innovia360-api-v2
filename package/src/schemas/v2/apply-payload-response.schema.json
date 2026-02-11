@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/apply-payload-response.schema.json",
+  "title": "ApplyPayloadResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "execution", "summary", "results"],
+  "properties": {
+    "ok": { "type": "boolean", "const": true },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_id", "site_url", "ruleset", "created_at"],
+      "properties": {
+        "execution_id": { "type": "string", "minLength": 10 },
+        "site_url": { "type": "string", "format": "uri" },
+        "ruleset": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "version": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items_total", "items_allowed", "items_skipped"],
+      "properties": {
+        "items_total": { "type": "integer", "minimum": 0 },
+        "items_allowed": { "type": "integer", "minimum": 0 },
+        "items_skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  }
+}

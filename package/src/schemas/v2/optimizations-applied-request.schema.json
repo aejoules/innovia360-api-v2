@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/optimizations-applied-request.schema.json",
+  "title": "OptimizationsAppliedRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site",
+    "execution",
+    "apply_batch",
+    "items"
+  ],
+  "properties": {
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site_url",
+        "cms",
+        "plugin",
+        "plugin_version",
+        "connector_used"
+      ],
+      "properties": {
+        "site_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "cms": {
+          "type": "string",
+          "const": "wordpress"
+        },
+        "plugin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connector_used": {
+          "type": "string",
+          "enum": [
+            "yoast",
+            "rankmath"
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "applied_at"
+      ],
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "minLength": 10
+        },
+        "applied_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "apply_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_id",
+        "mode",
+        "idempotency_key"
+      ],
+      "properties": {
+        "apply_id": {
+          "type": "string",
+          "minLength": 10
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "auto"
+          ]
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 200
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/AppliedItem"
+      }
+    }
+  },
+  "$defs": {
+    "LangCode": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "AppliedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wp_id",
+        "entity_type",
+        "lang",
+        "status",
+        "applied_fields"
+      ],
+      "properties": {
+        "wp_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "product",
+            "variation",
+            "post",
+            "page"
+          ]
+        },
+        "lang": {
+          "$ref": "#/$defs/LangCode"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "failed",
+            "skipped"
+          ]
+        },
+        "applied_fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "core",
+            "seo"
+          ],
+          "properties": {
+            "core": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "post_title",
+                  "post_excerpt",
+                  "post_content"
+                ]
+              }
+            },
+            "seo": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "title",
+                  "meta_description",
+                  "focus_keyword",
+                  "robots",
+                  "canonical"
+                ]
+              }
+            }
+          }
+        },
+        "wp_modified_gmt_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ],
+            "properties": {
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "success"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

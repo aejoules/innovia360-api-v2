@@ -1,0 +1,50 @@
+openapi: 3.0.3
+info:
+  title: Innovia360 API v2
+  version: 2.0.0
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+security:
+  - ApiKeyAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+  /v2/inventory/sync:
+    post:
+      summary: Inventory sync
+      responses:
+        '200': { description: OK }
+  /v2/optimizations/prepare:
+    post:
+      summary: Scan + Execution -> Apply payload
+      responses:
+        '200': { description: OK }
+  /v2/optimizations/applied:
+    post:
+      summary: Apply confirmation (audit)
+      responses:
+        '200': { description: OK }
+  /v2/scan/start:
+    post:
+      summary: Start async scan job
+      responses:
+        '200': { description: OK }
+  /v2/scans/{job_id}:
+    get:
+      summary: Get scan job status/result
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }

@@ -1,0 +1,36 @@
+{
+  "name": "innovia360-api-v2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "worker": "node src/worker.js",
+    "dev": "NODE_ENV=development nodemon src/index.js",
+    "dev:worker": "NODE_ENV=development nodemon src/worker.js",
+    "migrate": "node src/lib/migrate.js",
+    "openapi": "node src/lib/openapi.js"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1",
+    "bullmq": "^5.58.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.4.1",
+    "nanoid": "^5.0.7",
+    "pg": "^8.13.1",
+    "pino": "^9.4.0",
+    "pino-http": "^10.3.0",
+    "undici": "^6.19.8",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}

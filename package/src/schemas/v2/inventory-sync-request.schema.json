@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/inventory-sync-request.schema.json",
+  "title": "InventorySyncRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site",
+    "batch",
+    "entities"
+  ],
+  "properties": {
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site_url",
+        "cms",
+        "plugin",
+        "plugin_version",
+        "timezone",
+        "connectors"
+      ],
+      "properties": {
+        "site_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "cms": {
+          "type": "string",
+          "const": "wordpress"
+        },
+        "plugin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connectors": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "yoast",
+              "rankmath"
+            ]
+          }
+        },
+        "wc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "multilang": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "provider": {
+              "type": "string",
+              "enum": [
+                "wpml",
+                "polylang",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "cursor",
+        "limit",
+        "has_more"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 6
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/InventoryEntity"
+      }
+    }
+  },
+  "$defs": {
+    "LangCode": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "publish",
+        "draft",
+        "private",
+        "pending",
+        "future",
+        "trash"
+      ]
+    },
+    "EntityType": {
+      "type": "string",
+      "enum": [
+        "product",
+        "variation",
+        "post",
+        "page"
+      ]
+    },
+    "PostType": {
+      "type": "string",
+      "enum": [
+        "product",
+        "product_variation",
+        "post",
+        "page"
+      ]
+    },
+    "PublicHints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "http_status",
+        "indexable_hint"
+      ],
+      "properties": {
+        "http_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "indexable_hint": {
+          "type": "boolean"
+        }
+      }
+    },
+    "WCInfo": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "product_type",
+        "sku",
+        "parent_wp_id"
+      ],
+      "properties": {
+        "product_type": {
+          "type": "string",
+          "enum": [
+            "simple",
+            "variable",
+            "variation",
+            "grouped",
+            "external"
+          ]
+        },
+        "sku": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 190
+        },
+        "parent_wp_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "variation_attributes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "default_attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "InventoryEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wp_id",
+        "entity_type",
+        "post_type",
+        "status",
+        "lang",
+        "permalink",
+        "modified_gmt"
+      ],
+      "properties": {
+        "wp_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "entity_type": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "post_type": {
+          "$ref": "#/$defs/PostType"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "lang": {
+          "$ref": "#/$defs/LangCode"
+        },
+        "translation_group_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
+        "source_wp_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "slug": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "permalink": {
+          "type": "string",
+          "format": "uri"
+        },
+        "canonical": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 300
+        },
+        "excerpt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content_hash": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(sha1|sha256):[0-9a-fA-F]{8,}$"
+        },
+        "modified_gmt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "wc": {
+          "$ref": "#/$defs/WCInfo"
+        },
+        "public": {
+          "$ref": "#/$defs/PublicHints"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "entity_type": {
+                "const": "variation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "wc"
+            ],
+            "properties": {
+              "post_type": {
+                "const": "product_variation"
+              },
+              "wc": {
+                "type": "object",
+                "required": [
+                  "parent_wp_id",
+                  "attrs"
+                ],
+                "properties": {
+                  "parent_wp_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "attrs": {
+                    "type": "object",
+                    "minProperties": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

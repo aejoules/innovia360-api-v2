@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://innovia360.dev/schemas/v2/optimizations-prepare-request.schema.json",
+  "title": "OptimizationsPrepareRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site_url",
+    "scope",
+    "ruleset"
+  ],
+  "properties": {
+    "site_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_types"
+      ],
+      "properties": {
+        "entity_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "product",
+              "variation",
+              "post",
+              "page"
+            ]
+          }
+        },
+        "lang": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          }
+        }
+      }
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "publish",
+              "draft",
+              "private",
+              "pending",
+              "future",
+              "trash"
+            ]
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "only_wp_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "ruleset": {
+      "type": "string",
+      "minLength": 1
+    },
+    "focus_keyword": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "site_samples": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    }
+  }
+}
