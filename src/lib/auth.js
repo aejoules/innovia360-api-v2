@@ -14,8 +14,22 @@ function sha256Key(raw) {
 export function requireApiKey() {
   return async (req, res, next) => {
     try {
-      const header = req.headers['x-api-key'];
-      const apiKey = Array.isArray(header) ? header[0] : header;
+      // Accept API key from:
+      // - header: x-api-key: <key>
+      // - header: Authorization: Bearer <key>
+      // - query:  ?api_key=<key>
+      const hApiKey = req.headers['x-api-key'];
+      const apiKeyFromHeader = Array.isArray(hApiKey) ? hApiKey[0] : hApiKey;
+
+      const hAuth = req.headers['authorization'] || req.headers['Authorization'];
+      const auth = Array.isArray(hAuth) ? hAuth[0] : hAuth;
+      const apiKeyFromBearer = (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer '))
+        ? auth.slice(7).trim()
+        : null;
+
+      const apiKeyFromQuery = req.query?.api_key ? String(req.query.api_key) : null;
+
+      const apiKey = apiKeyFromHeader || apiKeyFromBearer || apiKeyFromQuery;
       if (!apiKey) {
         return res.status(401).json({ ok: false, error: { code: 'unauthorized', message: 'Missing API key' } });
       }

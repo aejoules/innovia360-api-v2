@@ -46,7 +46,18 @@ r.get('/executions/:execution_id', async (req, res, next) => {
     };
 
     if (row.status === 'done') {
-      return res.json({ ...base, result: row.result_payload });
+      const payload = row.result_payload || null;
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      const summary = payload?.summary || row.response_summary || null;
+      const execution = payload?.execution || {
+        execution_id: row.execution_id,
+        ruleset: row.ruleset,
+        mode: row.mode,
+        created_at: row.created_at,
+        started_at: row.started_at,
+        ended_at: row.ended_at
+      };
+      return res.json({ ...base, execution, summary, results, result: payload });
     }
     if (row.status === 'failed') {
       return res.json({ ...base, error: row.error_payload || { code: 'failed' } });
