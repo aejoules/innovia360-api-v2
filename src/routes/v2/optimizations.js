@@ -48,6 +48,31 @@ const getExecutionHandler = async (req, res, next) => {
       status: row.status,
       progress: row.progress ?? 0
     };
+    // Auto-timeout: if an execution is stuck in 'queued' too long, fail it so clients stop polling forever.
+    const STUCK_QUEUED_SECONDS = Number(process.env.EXECUTION_STUCK_QUEUED_SECONDS || 180);
+    if (row.status === 'queued' && row.started_at) {
+      const ageMs = Date.now() - new Date(row.started_at).getTime();
+      if (ageMs > STUCK_QUEUED_SECONDS * 1000) {
+        try {
+          await markExecutionFailed(execution_id, {
+            code: 'worker_not_running',
+            message: `Execution stuck in queued for ${Math.floor(ageMs/1000)}s. Worker/Redis may be down.`
+          });
+          // Reload and return failed state
+          const row2 = await getExecutionForTenant(execution_id, tenant_id);
+          return res.json({
+            ok: true,
+            execution_id: row2.execution_id,
+            status: row2.status,
+            progress: row2.progress ?? 0,
+            error: row2.error_payload || { code: 'worker_not_running' }
+          });
+        } catch (_) {
+          // if failing update fails, fall through
+        }
+      }
+    }
+
 
     if (row.status === 'done') {
       return res.json({ ...base, result: row.result_payload });
@@ -174,41 +199,6 @@ r.post('/optimizations/prepare',
   }
 );
 
-r.get('/executions/:execution_id', async (req, res, next) => {
-  try {
-    const ex = await getExecution(req.params.execution_id);
-    if (!ex) return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'Execution not found' } });
-    return res.json({ ok: true, execution: ex });
-  } catch (e) {
-    return next(e);
-  }
-});
-
-r.post('/optimizations/applied',
-  validateBody('https://innovia360.dev/schemas/v2/optimizations-applied-request.schema.json'),
-  async (req, res, next) => {
-    try {
-      const tenant_id = req.ctx?.tenant_id;
-      const { recordApply } = await import('../../services/applyService.js');
-      const rcv = await recordApply(tenant_id, req.body);
-
-      const items = req.body.items || [];
-      const success = items.filter(i => i.status === 'success').length;
-      const failed = items.filter(i => i.status === 'failed').length;
-      const skipped = items.filter(i => i.status === 'skipped').length;
-
-      return res.json({
-        ok: true,
-        apply_id: rcv.apply_id,
-        execution_id: req.body.execution.execution_id,
-        idempotent: rcv.idempotent,
-        received: { items_total: items.length, items_success: success, items_failed: failed, items_skipped: skipped },
-        actions: { scan_after_suggested: true }
-      });
-    } catch (e) {
-      return next(e);
-    }
-  }
-);
+// (removed duplicate /executions/:execution_id route; using getExecutionHandler above)
 
 export default r;
