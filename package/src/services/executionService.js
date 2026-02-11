@@ -92,8 +92,7 @@ export async function getExecutionForTenant(execution_id, tenant_id) {
   return withClient(async (c) => {
     const r = await c.query(
       `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.status, e.progress,
-              e.result_payload, e.error_payload, e.request_payload,
-              e.created_at, e.started_at, e.ended_at
+              e.result_payload, e.error_payload, e.request_payload, e.started_at, e.ended_at
        FROM public.optimization_executions e
        JOIN public.sites s ON s.id = e.site_id
        WHERE e.execution_id=$1 AND s.tenant_id=$2

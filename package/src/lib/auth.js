@@ -14,8 +14,19 @@ function sha256Key(raw) {
 export function requireApiKey() {
   return async (req, res, next) => {
     try {
+      // Support multiple auth styles for compatibility with WordPress / proxies
       const header = req.headers['x-api-key'];
-      const apiKey = Array.isArray(header) ? header[0] : header;
+      const hKey = Array.isArray(header) ? header[0] : header;
+
+      const auth = req.headers['authorization'];
+      const hAuth = Array.isArray(auth) ? auth[0] : auth;
+      const bearer = (hAuth && String(hAuth).toLowerCase().startsWith('bearer '))
+        ? String(hAuth).slice(7).trim()
+        : null;
+
+      const qKey = req.query?.api_key ? String(req.query.api_key) : null;
+
+      const apiKey = hKey || bearer || qKey;
       if (!apiKey) {
         return res.status(401).json({ ok: false, error: { code: 'unauthorized', message: 'Missing API key' } });
       }
