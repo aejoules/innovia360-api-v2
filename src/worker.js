@@ -24,7 +24,6 @@ if ((process.env.MIGRATE_ON_BOOT || 'true') === 'true') {
 }
 
 const connection = getRedis();
-logger.info({ redis: 'connected', scan_queue: SCAN_QUEUE_NAME, execution_queue: EXECUTION_QUEUE_NAME }, 'bullmq config');
 
 async function fetchExecutionRequest(execution_id) {
   return withClient(async (c) => {
@@ -81,7 +80,6 @@ async function doExecutionPrepare(execution_id) {
     ruleset: ex.ruleset,
     inventory,
     site_samples: req.site_samples || [],
-    focus_keyword: req.focus_keyword || null,
     onProgress: async (done, total) => {
       const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
       await setExecutionProgress(execution_id, p);
@@ -203,59 +201,5 @@ new Worker(EXECUTION_QUEUE_NAME, async (job) => {
     throw err;
   }
 }, { connection, concurrency: Number(process.env.EXECUTION_CONCURRENCY || 2) });
-
-// DB fallback poller: if Redis/BullMQ jobs are not delivered (e.g., eviction policy allkeys-lru),
-// we still progress executions by claiming queued rows from Postgres.
-// Enable with DB_FALLBACK_ENABLED=true (default true).
-const DB_FALLBACK_ENABLED = (process.env.DB_FALLBACK_ENABLED ?? 'true') !== 'false';
-const DB_FALLBACK_INTERVAL_MS = Number(process.env.DB_FALLBACK_INTERVAL_MS || 5000);
-const DB_FALLBACK_BATCH = Number(process.env.DB_FALLBACK_BATCH || 1);
-
-async function claimQueuedExecutions(limit = 1) {
-  return withClient(async (c) => {
-    // Use SKIP LOCKED to avoid multi-worker collisions
-    const q = `
-      WITH picked AS (
-        SELECT execution_id
-        FROM public.optimization_executions
-        WHERE status='queued'
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT $1
-      )
-      UPDATE public.optimization_executions e
-      SET status='running',
-          started_at=COALESCE(started_at, now()),
-          progress=GREATEST(COALESCE(progress,0), 1)
-      FROM picked
-      WHERE e.execution_id = picked.execution_id
-      RETURNING e.execution_id
-    `;
-    const r = await c.query(q, [limit]);
-    return r.rows.map(x => x.execution_id);
-  });
-}
-
-async function dbFallbackTick() {
-  try {
-    const ids = await claimQueuedExecutions(DB_FALLBACK_BATCH);
-    for (const execution_id of ids) {
-      try {
-        await doExecutionPrepare(execution_id);
-        // doExecutionPrepare is expected to mark done/failed internally.
-      } catch (err) {
-        logger.error({ err, execution_id }, 'db fallback execution failed');
-        await markExecutionFailed(execution_id, { code: 'execution_failed', message: String(err?.message || err) });
-      }
-    }
-  } catch (err) {
-    logger.warn({ err }, 'db fallback tick failed');
-  }
-}
-
-if (DB_FALLBACK_ENABLED) {
-  setInterval(dbFallbackTick, DB_FALLBACK_INTERVAL_MS);
-  logger.info({ DB_FALLBACK_INTERVAL_MS, DB_FALLBACK_BATCH }, 'db fallback poller enabled');
-}
 
 logger.info('worker started');

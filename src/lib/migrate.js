@@ -6,10 +6,6 @@ import { withAdvisoryLock } from './locks.js';
 import { sha256 } from './hash.js';
 import { logger } from './logger.js';
 
-// If true, the migrator will not crash on checksum mismatch for an already-applied migration.
-// Instead it will update schema_migrations.checksum to the current file checksum and continue.
-const MIGRATE_ACCEPT_CHANGED_CHECKSUMS = String(process.env.MIGRATE_ACCEPT_CHANGED_CHECKSUMS || 'false').toLowerCase() === 'true';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 

@@ -7,14 +7,12 @@ import {
   createExecution,
   getExecution,
   getExecutionForTenant,
-  listOptimizationResultsForTenant,
   setExecutionStatus,
   setExecutionProgress,
   markExecutionDone,
   markExecutionFailed,
   upsertOptimizationResult,
-  buildApplyPayload,
-  recordOptimizationsApplied
+  buildApplyPayload
 } from '../../services/executionService.js';
 import { getExecutionQueue } from '../../queues/executionQueue.js';
 import { runPrepare } from '../../engine/prepareRunner.js';
@@ -22,16 +20,12 @@ import { runPrepare } from '../../engine/prepareRunner.js';
 const r = Router();
 
 const SYNC_LIMIT = Number(process.env.SYNC_LIMIT || 50);
-// /v2/optimizations/prepare can involve crawling + AI calls and can exceed typical
-// reverse-proxy/PHP timeouts (especially when called from WordPress). To avoid
-// request timeouts, support an async-first mode.
-const FORCE_ASYNC_PREPARE = String(process.env.FORCE_ASYNC_PREPARE || 'true').toLowerCase() !== 'false';
 
 /**
  * GET /v2/executions/:execution_id
  * Poll the execution status (queued/running/done/failed).
  */
-const getExecutionHandler = async (req, res, next) => {
+r.get('/executions/:execution_id', async (req, res, next) => {
   try {
     const tenant_id = req.ctx?.tenant_id;
     const { execution_id } = req.params;
@@ -50,46 +44,9 @@ const getExecutionHandler = async (req, res, next) => {
       status: row.status,
       progress: row.progress ?? 0
     };
-    // Auto-timeout: if an execution is stuck in 'queued' too long, fail it so clients stop polling forever.
-    const STUCK_QUEUED_SECONDS = Number(process.env.EXECUTION_STUCK_QUEUED_SECONDS || 180);
-    if (row.status === 'queued' && row.started_at) {
-      const ageMs = Date.now() - new Date(row.started_at).getTime();
-      if (ageMs > STUCK_QUEUED_SECONDS * 1000) {
-        try {
-          await markExecutionFailed(execution_id, {
-            code: 'worker_not_running',
-            message: `Execution stuck in queued for ${Math.floor(ageMs/1000)}s. Worker/Redis may be down.`
-          });
-          // Reload and return failed state
-          const row2 = await getExecutionForTenant(execution_id, tenant_id);
-          return res.json({
-            ok: true,
-            execution_id: row2.execution_id,
-            status: row2.status,
-            progress: row2.progress ?? 0,
-            error: row2.error_payload || { code: 'worker_not_running' }
-          });
-        } catch (_) {
-          // if failing update fails, fall through
-        }
-      }
-    }
-
 
     if (row.status === 'done') {
-      const payload = row.result_payload || null;
-      // Standardize for clients (WP plugin): always expose results + summary at top-level.
-      const results = Array.isArray(payload?.results) ? payload.results : [];
-      const summary = payload?.summary || row.response_summary || null;
-      const execution = payload?.execution || {
-        execution_id: row.execution_id,
-        ruleset: row.ruleset,
-        mode: row.mode,
-        created_at: row.created_at,
-        started_at: row.started_at,
-        ended_at: row.ended_at
-      };
-      return res.json({ ...base, execution, summary, results, result: payload });
+      return res.json({ ...base, result: row.result_payload });
     }
     if (row.status === 'failed') {
       return res.json({ ...base, error: row.error_payload || { code: 'failed' } });
@@ -98,59 +55,7 @@ const getExecutionHandler = async (req, res, next) => {
   } catch (e) {
     return next(e);
   }
-};
-
-r.get('/executions/:execution_id', getExecutionHandler);
-r.get('/optimizations/executions/:execution_id', getExecutionHandler);
-
-/**
- * GET /v2/executions/:execution_id/results
- * Fetch normalized results from optimization_results table (stable for WP preview).
- */
-r.get('/executions/:execution_id/results', async (req, res, next) => {
-  try {
-    const tenant_id = req.ctx?.tenant_id;
-    const { execution_id } = req.params;
-
-    const exec = await getExecutionForTenant(execution_id, tenant_id);
-    if (!exec) {
-      return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'Execution not found' } });
-    }
-
-    const rows = await listOptimizationResultsForTenant(execution_id, tenant_id, Number(req.query.limit||5000), Number(req.query.offset||0));
-    // Normalize into the same shape expected by WP plugin renderPreview()
-    const results = rows.map(r => ({
-      wp_id: r.wp_id,
-      entity_type: r.entity_type,
-      post_type: r.post_type,
-      status: r.status,
-      lang: r.lang,
-      decision: r.decision,
-      public_source: r.public_source,
-      before: r.before_payload,
-      after: r.after_payload,
-      diff: r.diff_payload,
-      apply: r.apply_payload
-    }));
-
-    const summary = exec.response_summary || (exec.result_payload ? exec.result_payload.summary : null) || null;
-    const execution = {
-      execution_id: exec.execution_id,
-      ruleset: exec.ruleset,
-      mode: exec.mode,
-      status: exec.status,
-      progress: exec.progress ?? 0,
-      created_at: exec.created_at,
-      started_at: exec.started_at,
-      ended_at: exec.ended_at
-    };
-
-    return res.json({ ok: true, execution, summary, results });
-  } catch (e) {
-    return next(e);
-  }
 });
-
 
 r.post('/optimizations/prepare',
   validateBody('https://innovia360.dev/schemas/v2/optimizations-prepare-request.schema.json'),
@@ -173,11 +78,6 @@ r.post('/optimizations/prepare',
         : rawInventory;
       const execution_id = makeExecutionId();
 
-      // Async-first: anything non-quick (AI / richer processing) should run in worker
-      // to avoid request timeouts from WordPress/PHP/reverse proxies.
-      const rulesetName = String(ruleset || '').toLowerCase();
-      const shouldAsync = FORCE_ASYNC_PREPARE || (inventory.length > SYNC_LIMIT) || (rulesetName !== 'quick_boost');
-
       // Create execution record
       await createExecution({
         execution_id,
@@ -185,24 +85,13 @@ r.post('/optimizations/prepare',
         ruleset,
         connector_target: 'auto',
         request_payload: req.body,
-        status: shouldAsync ? 'queued' : 'running',
-        progress: shouldAsync ? 0 : 1
+        status: (inventory.length > SYNC_LIMIT) ? 'queued' : 'running',
+        progress: (inventory.length > SYNC_LIMIT) ? 0 : 1
       });
 
-      if (shouldAsync) {
+      if (inventory.length > SYNC_LIMIT) {
         const q = getExecutionQueue();
-
-        // Fire-and-forget enqueue to avoid hanging the HTTP request when Redis/queue
-        // is slow or temporarily unavailable (WordPress will otherwise timeout).
-        // We still return execution_id immediately; the execution will move to
-        // 'running' once the worker picks it up. If enqueue fails, we mark it failed.
-        Promise.resolve()
-          .then(() => q.add('execution_prepare', { execution_id }, { attempts: 2 }))
-          .catch(async (err) => {
-            try {
-              await setExecutionStatus(execution_id, 'failed', 0, String(err?.message || err || 'enqueue_failed'));
-            } catch (_) {}
-          });
+        await q.add('execution_prepare', { execution_id }, { attempts: 2 });
 
         return res.status(202).json({
           ok: true,
@@ -210,12 +99,12 @@ r.post('/optimizations/prepare',
           status: 'queued',
           progress: 0,
           links: {
-            poll: `/v2/optimizations/executions/${execution_id}`
+            poll: `/v2/executions/${execution_id}`
           }
         });
       }
 
-      // Sync path (deterministic only)
+      // Sync path
       await setExecutionStatus(execution_id, 'running', 1);
 
       const results = await runPrepare({
@@ -223,7 +112,6 @@ r.post('/optimizations/prepare',
         ruleset,
         inventory,
         site_samples,
-        focus_keyword,
         onProgress: async (done, total) => {
           const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
           await setExecutionProgress(execution_id, p);
@@ -262,24 +150,41 @@ r.post('/optimizations/prepare',
   }
 );
 
-// (removed duplicate /executions/:execution_id route; using getExecutionHandler above)
+r.get('/executions/:execution_id', async (req, res, next) => {
+  try {
+    const ex = await getExecution(req.params.execution_id);
+    if (!ex) return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'Execution not found' } });
+    return res.json({ ok: true, execution: ex });
+  } catch (e) {
+    return next(e);
+  }
+});
 
-export default r;
-
-/**
- * POST /v2/optimizations/applied
- * CMS client confirmation after applying changes in WordPress.
- * Records batch + per-item statuses (idempotent) and updates latest applied_* on optimization_results.
- */
 r.post('/optimizations/applied',
   validateBody('https://innovia360.dev/schemas/v2/optimizations-applied-request.schema.json'),
   async (req, res, next) => {
     try {
       const tenant_id = req.ctx?.tenant_id;
-      const out = await recordOptimizationsApplied(tenant_id, req.body);
-      return res.json(out);
+      const { recordApply } = await import('../../services/applyService.js');
+      const rcv = await recordApply(tenant_id, req.body);
+
+      const items = req.body.items || [];
+      const success = items.filter(i => i.status === 'success').length;
+      const failed = items.filter(i => i.status === 'failed').length;
+      const skipped = items.filter(i => i.status === 'skipped').length;
+
+      return res.json({
+        ok: true,
+        apply_id: rcv.apply_id,
+        execution_id: req.body.execution.execution_id,
+        idempotent: rcv.idempotent,
+        received: { items_total: items.length, items_success: success, items_failed: failed, items_skipped: skipped },
+        actions: { scan_after_suggested: true }
+      });
     } catch (e) {
       return next(e);
     }
   }
 );
+
+export default r;

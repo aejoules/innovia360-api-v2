@@ -73,7 +73,7 @@ export async function markExecutionFailed(execution_id, error_payload) {
 export async function getExecution(execution_id) {
   return withClient(async (c) => {
     const r = await c.query(
-      `SELECT execution_id, site_id, ruleset, connector_target, mode, status, progress, result_payload, response_summary, error_payload, request_payload, created_at, started_at, ended_at
+      `SELECT execution_id, site_id, ruleset, connector_target, status, progress, result_payload, error_payload, request_payload, started_at, ended_at
        FROM public.optimization_executions
        WHERE execution_id=$1
        LIMIT 1`,
@@ -91,8 +91,8 @@ export async function getExecutionForTenant(execution_id, tenant_id) {
   if (!tenant_id) return null;
   return withClient(async (c) => {
     const r = await c.query(
-      `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.mode, e.status, e.progress,
-              e.result_payload, e.response_summary, e.error_payload, e.request_payload, e.created_at, e.started_at, e.ended_at
+      `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.status, e.progress,
+              e.result_payload, e.error_payload, e.request_payload, e.started_at, e.ended_at
        FROM public.optimization_executions e
        JOIN public.sites s ON s.id = e.site_id
        WHERE e.execution_id=$1 AND s.tenant_id=$2
@@ -100,24 +100,6 @@ export async function getExecutionForTenant(execution_id, tenant_id) {
       [execution_id, tenant_id]
     );
     return r.rows[0] || null;
-  });
-}
-
-
-export async function listOptimizationResultsForTenant(execution_id, tenant_id, limit = 5000, offset = 0) {
-  if (!tenant_id) return [];
-  return withClient(async (c) => {
-    const r = await c.query(
-      `SELECT r.id, r.execution_id, r.site_id, r.wp_id, r.entity_type, r.post_type, r.status, r.lang,
-              r.decision, r.public_source, r.before_payload, r.after_payload, r.diff_payload, r.apply_payload, r.created_at
-       FROM public.optimization_results r
-       JOIN public.sites s ON s.id = r.site_id
-       WHERE r.execution_id=$1 AND s.tenant_id=$2
-       ORDER BY r.created_at ASC
-       LIMIT $3 OFFSET $4`,
-      [execution_id, tenant_id, limit, offset]
-    );
-    return r.rows || [];
   });
 }
 
@@ -180,211 +162,4 @@ export function buildApplyPayload({ site_url, ruleset, execution_id, results }) 
     },
     results
   };
-}
-
-
-/**
- * Record an "applied" confirmation coming from a CMS client (WordPress plugin).
- * - Idempotent on apply_batch.idempotency_key
- * - Writes batch + items
- * - Updates optimization_results with latest applied_* fields
- * - Marks optimization_executions.applied_at
- */
-export async function recordOptimizationsApplied(tenant_id, body) {
-  if (!tenant_id) throw new Error('missing tenant_id');
-
-  const site_url = body?.site?.site_url;
-  const execution_id = body?.execution?.execution_id;
-  const applied_at = body?.execution?.applied_at || new Date().toISOString();
-
-  const apply_id = body?.apply_batch?.apply_id;
-  const mode = body?.apply_batch?.mode || 'manual';
-  const idempotency_key = body?.apply_batch?.idempotency_key;
-
-  if (!site_url) throw new Error('missing site.site_url');
-  if (!execution_id) throw new Error('missing execution.execution_id');
-  if (!idempotency_key) throw new Error('missing apply_batch.idempotency_key');
-  if (!apply_id) throw new Error('missing apply_batch.apply_id');
-
-  const plugin = body?.site?.plugin || 'seo-agent-boost';
-  const plugin_version = body?.site?.plugin_version || 'unknown';
-  const connector_used = body?.site?.connector_used || 'auto';
-
-  const items = Array.isArray(body.items) ? body.items : [];
-  const counts = {
-    total: items.length,
-    success: items.filter(i => i.status === 'success').length,
-    failed: items.filter(i => i.status === 'failed').length,
-    skipped: items.filter(i => i.status === 'skipped').length
-  };
-
-  return withClient(async (c) => {
-    // Resolve site under tenant
-    const siteRes = await c.query(
-      `SELECT s.id
-       FROM public.sites s
-       WHERE s.tenant_id=$1 AND s.site_url=$2
-       LIMIT 1`,
-      [tenant_id, site_url]
-    );
-    const site = siteRes.rows[0];
-    if (!site) {
-      const e = new Error('site_not_found');
-      e.code = 'site_not_found';
-      throw e;
-    }
-
-    // Ensure execution belongs to this site
-    const execRes = await c.query(
-      `SELECT e.execution_id
-       FROM public.optimization_executions e
-       WHERE e.execution_id=$1 AND e.site_id=$2
-       LIMIT 1`,
-      [execution_id, site.id]
-    );
-    if (execRes.rowCount === 0) {
-      const e = new Error('execution_not_found');
-      e.code = 'execution_not_found';
-      throw e;
-    }
-
-    // Idempotency: if batch already exists, return it
-    const existing = await c.query(
-      `SELECT apply_id, applied_at
-       FROM public.apply_batches
-       WHERE idempotency_key=$1
-       LIMIT 1`,
-      [idempotency_key]
-    );
-    if (existing.rowCount > 0) {
-      const itRes = await c.query(
-        `SELECT status FROM public.apply_items WHERE apply_id=$1`,
-        [existing.rows[0].apply_id]
-      );
-      const statuses = itRes.rows.map(x => x.status);
-      return {
-        ok: true,
-        execution_id,
-        apply_id: existing.rows[0].apply_id,
-        idempotency_key,
-        already_recorded: true,
-        summary: {
-          items_total: statuses.length,
-          items_success: statuses.filter(s => s === 'success').length,
-          items_failed: statuses.filter(s => s === 'failed').length,
-          items_skipped: statuses.filter(s => s === 'skipped').length
-        }
-      };
-    }
-
-    await c.query('BEGIN');
-    try {
-      await c.query(
-        `INSERT INTO public.apply_batches(
-           apply_id, execution_id, site_id,
-           connector_used, mode,
-           idempotency_key, applied_at,
-           items_total, items_success, items_failed, items_skipped,
-           plugin, plugin_version, raw_payload
-         )
-         VALUES($1,$2,$3,$4,$5,$6,$7::timestamptz,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
-        [
-          apply_id,
-          execution_id,
-          site.id,
-          connector_used,
-          mode,
-          idempotency_key,
-          applied_at,
-          counts.total,
-          counts.success,
-          counts.failed,
-          counts.skipped,
-          plugin,
-          plugin_version,
-          JSON.stringify(body)
-        ]
-      );
-
-      for (const it of items) {
-        await c.query(
-          `INSERT INTO public.apply_items(
-             apply_id, execution_id, site_id,
-             wp_id, entity_type, lang,
-             status, applied_fields, wp_modified_gmt_after, error_payload
-           )
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::timestamptz,$10::jsonb)
-           ON CONFLICT (apply_id, wp_id, lang)
-           DO UPDATE SET
-             status=EXCLUDED.status,
-             applied_fields=EXCLUDED.applied_fields,
-             wp_modified_gmt_after=EXCLUDED.wp_modified_gmt_after,
-             error_payload=EXCLUDED.error_payload`,
-          [
-            apply_id,
-            execution_id,
-            site.id,
-            it.wp_id,
-            it.entity_type,
-            it.lang,
-            it.status,
-            JSON.stringify(it.applied_fields || {}),
-            it.wp_modified_gmt_after || null,
-            it.error_payload ? JSON.stringify(it.error_payload) : null
-          ]
-        );
-
-        // Best-effort: update latest applied state on optimization_results
-        await c.query(
-          `UPDATE public.optimization_results
-           SET applied_at = $5::timestamptz,
-               applied_status = $4,
-               applied_fields = $6::jsonb,
-               applied_error = $7::jsonb,
-               apply_id = $2,
-               idempotency_key = $3
-           WHERE execution_id=$1 AND wp_id=$8 AND lang=$9`,
-          [
-            execution_id,
-            apply_id,
-            idempotency_key,
-            it.status,
-            applied_at,
-            JSON.stringify(it.applied_fields || {}),
-            it.error_payload ? JSON.stringify(it.error_payload) : null,
-            it.wp_id,
-            it.lang
-          ]
-        );
-      }
-
-      // Mark execution applied_at
-      await c.query(
-        `UPDATE public.optimization_executions
-         SET applied_at = COALESCE(applied_at, $2::timestamptz)
-         WHERE execution_id=$1`,
-        [execution_id, applied_at]
-      );
-
-      await c.query('COMMIT');
-    } catch (e) {
-      await c.query('ROLLBACK');
-      throw e;
-    }
-
-    const statuses = items.map(x => x.status);
-    return {
-      ok: true,
-      execution_id,
-      apply_id,
-      idempotency_key,
-      already_recorded: false,
-      summary: {
-        items_total: statuses.length,
-        items_success: statuses.filter(s => s === 'success').length,
-        items_failed: statuses.filter(s => s === 'failed').length,
-        items_skipped: statuses.filter(s => s === 'skipped').length
-      }
-    };
-  });
 }

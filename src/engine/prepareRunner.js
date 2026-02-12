@@ -3,24 +3,11 @@ import { quickBoost } from './quickBoost.js';
 import { aiBoost } from './aiBoost.js';
 import { computeDiff, scoreFromSignals, scoreFromSignalsWithOverrides } from './utils.js';
 
-
-function isKeywordRelevant(keyword, text) {
-  const kw = String(keyword || '').trim().toLowerCase();
-  if (!kw) return false;
-  const t = String(text || '').toLowerCase();
-  // Basic relevance: keyword (or its main token) must appear in title/source.
-  if (t.includes(kw)) return true;
-  const main = kw.split(/\s+/).filter(Boolean)[0];
-  if (main && main.length >= 4 && t.includes(main)) return true;
-  return false;
-}
-
-
 /**
  * Prepare runner (used both sync and worker).
  * Takes inventory entities and produces ApplyPayload results[].
  */
-export async function runPrepare({ site_url, ruleset, inventory, site_samples = [], focus_keyword = null, onProgress }) {
+export async function runPrepare({ site_url, ruleset, inventory, site_samples = [], onProgress }) {
   const results = [];
   const total = inventory.length;
 
@@ -53,11 +40,7 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
     }
 
     const signals = crawl.signals;
-    const scanRes = scoreFromSignals(signals, { slug: e.slug || '' });
-    const score = scanRes.score;
-    const issues = scanRes.issues;
-    const seo_fields_score = scanRes.seo_fields_score;
-    const fields_issues = scanRes.fields_issues;
+    const { score, issues } = scoreFromSignals(signals);
 
     const before = {
       core: {
@@ -70,7 +53,7 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
         robots: signals.robots || null,
         canonical: signals.canonical || null
       },
-      scan: { score, issues, seo_fields_score, fields_issues, metrics: scanRes.metrics }
+      scan: { score, issues, metrics: { text_len: signals.text_len, h1_count: signals.h1_count, indexable: signals.indexable } }
     };
 
     // --- Generator: deterministic quickBoost OR AI boost (with deterministic fallback) ---
@@ -97,11 +80,7 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
       const ai = await aiBoost({
         mode: String(ruleset || 'safe_boost'),
         lang: e.lang || 'fr',
-        focus_keyword: (() => {
-        const kw = e.focus_keyword || focus_keyword || null;
-        const src = (e.title || signals.title || '');
-        return isKeywordRelevant(kw, src) ? kw : null;
-      })(),
+        focus_keyword: e.focus_keyword || null,
         site_samples: samples,
         beforeFields,
         source: {
@@ -130,11 +109,7 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
             meta_description: generated.fields.yoast_metadesc || generated.fields.meta_description || signals.meta_description || '',
             robots: signals.robots || null,
             canonical: signals.canonical || null,
-            focus_keyword: (() => {
-            const kw = e.focus_keyword || focus_keyword || null;
-            const src = (e.title || signals.title || '');
-            return isKeywordRelevant(kw, src) ? kw : null;
-          })()
+            focus_keyword: e.focus_keyword || null
           },
           _ai: { generator, output: generated }
         }
@@ -157,10 +132,10 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
     const afterScore = scoreFromSignalsWithOverrides(signals, {
       title: after.seo?.title,
       meta_description: after.seo?.meta_description
-    }, { slug: e.slug || '' });
+    });
 
-    const score_before = seo_fields_score;
-    const score_after = afterScore.seo_fields_score;
+    const score_before = score;
+    const score_after = afterScore.score;
     const delta = score_after - score_before;
 
     // decision policy SAB v1 (non-breaking extension)
@@ -204,7 +179,7 @@ export async function runPrepare({ site_url, ruleset, inventory, site_samples = 
       apply: {
         allowed,
         reason,
-        seo_score: { source: 'yoast', before: score_before, after: score_after, delta, scan_before: score, scan_after: afterScore.score },
+        seo_score: { source: 'yoast', before: score_before, after: score_after, delta },
         engine: boosted?._ai?.generator || { kind: 'deterministic' },
         update: allowed ? {
           connector_target: 'auto',

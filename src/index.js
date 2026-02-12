@@ -44,10 +44,12 @@ app.use('/v2', apiRateLimit(), requireApiKey());
 const { default: inventoryRouter } = await import('./routes/v2/inventory.js');
 const { default: optimizationsRouter } = await import('./routes/v2/optimizations.js');
 const { default: scanRouter } = await import('./routes/v2/scan.js');
+const { default: performanceRouter } = await import('./routes/v2/performance.js');
 
 app.use('/v2', inventoryRouter);
 app.use('/v2', optimizationsRouter);
 app.use('/v2', scanRouter);
+app.use('/v2', performanceRouter);
 
 app.use((err, _req, res, _next) => {
   logger.error({ err }, 'unhandled');
