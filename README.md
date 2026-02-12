@@ -64,3 +64,9 @@ export REDIS_URL=redis://...
 npm run dev
 npm run dev:worker
 ```
+
+
+## Migration checksum mismatches (Render/Prod)
+
+- By default, the service fails fast if an already-applied migration file changes.
+- To recover from historical drift, set env `MIGRATE_ACCEPT_CHANGED_CHECKSUMS=true` to update the stored checksum and continue boot.
