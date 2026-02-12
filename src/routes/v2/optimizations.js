@@ -7,6 +7,7 @@ import {
   createExecution,
   getExecution,
   getExecutionForTenant,
+  listOptimizationResultsForTenant,
   setExecutionStatus,
   setExecutionProgress,
   markExecutionDone,
@@ -23,7 +24,7 @@ const SYNC_LIMIT = Number(process.env.SYNC_LIMIT || 50);
 // /v2/optimizations/prepare can involve crawling + AI calls and can exceed typical
 // reverse-proxy/PHP timeouts (especially when called from WordPress). To avoid
 // request timeouts, support an async-first mode.
-const FORCE_ASYNC_PREPARE = String(process.env.FORCE_ASYNC_PREPARE || '').toLowerCase() === 'true';
+const FORCE_ASYNC_PREPARE = String(process.env.FORCE_ASYNC_PREPARE || 'true').toLowerCase() !== 'false';
 
 /**
  * GET /v2/executions/:execution_id
@@ -100,6 +101,55 @@ const getExecutionHandler = async (req, res, next) => {
 
 r.get('/executions/:execution_id', getExecutionHandler);
 r.get('/optimizations/executions/:execution_id', getExecutionHandler);
+
+/**
+ * GET /v2/executions/:execution_id/results
+ * Fetch normalized results from optimization_results table (stable for WP preview).
+ */
+r.get('/executions/:execution_id/results', async (req, res, next) => {
+  try {
+    const tenant_id = req.ctx?.tenant_id;
+    const { execution_id } = req.params;
+
+    const exec = await getExecutionForTenant(execution_id, tenant_id);
+    if (!exec) {
+      return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'Execution not found' } });
+    }
+
+    const rows = await listOptimizationResultsForTenant(execution_id, tenant_id, Number(req.query.limit||5000), Number(req.query.offset||0));
+    // Normalize into the same shape expected by WP plugin renderPreview()
+    const results = rows.map(r => ({
+      wp_id: r.wp_id,
+      entity_type: r.entity_type,
+      post_type: r.post_type,
+      status: r.status,
+      lang: r.lang,
+      decision: r.decision,
+      public_source: r.public_source,
+      before: r.before_payload,
+      after: r.after_payload,
+      diff: r.diff_payload,
+      apply: r.apply_payload
+    }));
+
+    const summary = exec.response_summary || (exec.result_payload ? exec.result_payload.summary : null) || null;
+    const execution = {
+      execution_id: exec.execution_id,
+      ruleset: exec.ruleset,
+      mode: exec.mode,
+      status: exec.status,
+      progress: exec.progress ?? 0,
+      created_at: exec.created_at,
+      started_at: exec.started_at,
+      ended_at: exec.ended_at
+    };
+
+    return res.json({ ok: true, execution, summary, results });
+  } catch (e) {
+    return next(e);
+  }
+});
+
 
 r.post('/optimizations/prepare',
   validateBody('https://innovia360.dev/schemas/v2/optimizations-prepare-request.schema.json'),

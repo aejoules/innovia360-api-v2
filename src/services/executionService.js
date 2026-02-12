@@ -73,7 +73,7 @@ export async function markExecutionFailed(execution_id, error_payload) {
 export async function getExecution(execution_id) {
   return withClient(async (c) => {
     const r = await c.query(
-      `SELECT execution_id, site_id, ruleset, connector_target, status, progress, result_payload, error_payload, request_payload, started_at, ended_at
+      `SELECT execution_id, site_id, ruleset, connector_target, mode, status, progress, result_payload, response_summary, error_payload, request_payload, created_at, started_at, ended_at
        FROM public.optimization_executions
        WHERE execution_id=$1
        LIMIT 1`,
@@ -91,8 +91,8 @@ export async function getExecutionForTenant(execution_id, tenant_id) {
   if (!tenant_id) return null;
   return withClient(async (c) => {
     const r = await c.query(
-      `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.status, e.progress,
-              e.result_payload, e.error_payload, e.request_payload, e.started_at, e.ended_at
+      `SELECT e.execution_id, e.site_id, e.ruleset, e.connector_target, e.mode, e.status, e.progress,
+              e.result_payload, e.response_summary, e.error_payload, e.request_payload, e.created_at, e.started_at, e.ended_at
        FROM public.optimization_executions e
        JOIN public.sites s ON s.id = e.site_id
        WHERE e.execution_id=$1 AND s.tenant_id=$2
@@ -100,6 +100,24 @@ export async function getExecutionForTenant(execution_id, tenant_id) {
       [execution_id, tenant_id]
     );
     return r.rows[0] || null;
+  });
+}
+
+
+export async function listOptimizationResultsForTenant(execution_id, tenant_id, limit = 5000, offset = 0) {
+  if (!tenant_id) return [];
+  return withClient(async (c) => {
+    const r = await c.query(
+      `SELECT r.id, r.execution_id, r.site_id, r.wp_id, r.entity_type, r.post_type, r.status, r.lang,
+              r.decision, r.public_source, r.before_payload, r.after_payload, r.diff_payload, r.apply_payload, r.created_at
+       FROM public.optimization_results r
+       JOIN public.sites s ON s.id = r.site_id
+       WHERE r.execution_id=$1 AND s.tenant_id=$2
+       ORDER BY r.created_at ASC
+       LIMIT $3 OFFSET $4`,
+      [execution_id, tenant_id, limit, offset]
+    );
+    return r.rows || [];
   });
 }
 
