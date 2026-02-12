@@ -265,3 +265,21 @@ r.post('/optimizations/prepare',
 // (removed duplicate /executions/:execution_id route; using getExecutionHandler above)
 
 export default r;
+
+/**
+ * POST /v2/optimizations/applied
+ * CMS client confirmation after applying changes in WordPress.
+ * Records batch + per-item statuses (idempotent) and updates latest applied_* on optimization_results.
+ */
+r.post('/optimizations/applied',
+  validateBody('https://innovia360.dev/schemas/v2/optimizations-applied-request.schema.json'),
+  async (req, res, next) => {
+    try {
+      const tenant_id = req.ctx?.tenant_id;
+      const out = await recordOptimizationsApplied(tenant_id, req.body);
+      return res.json(out);
+    } catch (e) {
+      return next(e);
+    }
+  }
+);

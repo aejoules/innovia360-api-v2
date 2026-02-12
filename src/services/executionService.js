@@ -192,12 +192,31 @@ export function buildApplyPayload({ site_url, ruleset, execution_id, results }) 
  */
 export async function recordOptimizationsApplied(tenant_id, body) {
   if (!tenant_id) throw new Error('missing tenant_id');
+
   const site_url = body?.site?.site_url;
   const execution_id = body?.execution?.execution_id;
-  const applied_at = body?.execution?.applied_at;
+  const applied_at = body?.execution?.applied_at || new Date().toISOString();
+
   const apply_id = body?.apply_batch?.apply_id;
-  const mode = body?.apply_batch?.mode;
+  const mode = body?.apply_batch?.mode || 'manual';
   const idempotency_key = body?.apply_batch?.idempotency_key;
+
+  if (!site_url) throw new Error('missing site.site_url');
+  if (!execution_id) throw new Error('missing execution.execution_id');
+  if (!idempotency_key) throw new Error('missing apply_batch.idempotency_key');
+  if (!apply_id) throw new Error('missing apply_batch.apply_id');
+
+  const plugin = body?.site?.plugin || 'seo-agent-boost';
+  const plugin_version = body?.site?.plugin_version || 'unknown';
+  const connector_used = body?.site?.connector_used || 'auto';
+
+  const items = Array.isArray(body.items) ? body.items : [];
+  const counts = {
+    total: items.length,
+    success: items.filter(i => i.status === 'success').length,
+    failed: items.filter(i => i.status === 'failed').length,
+    skipped: items.filter(i => i.status === 'skipped').length
+  };
 
   return withClient(async (c) => {
     // Resolve site under tenant
@@ -215,7 +234,7 @@ export async function recordOptimizationsApplied(tenant_id, body) {
       throw e;
     }
 
-    // Ensure execution belongs to this site + tenant
+    // Ensure execution belongs to this site
     const execRes = await c.query(
       `SELECT e.execution_id
        FROM public.optimization_executions e
@@ -229,20 +248,20 @@ export async function recordOptimizationsApplied(tenant_id, body) {
       throw e;
     }
 
-    // Idempotency: if batch already exists, return previous summary
+    // Idempotency: if batch already exists, return it
     const existing = await c.query(
       `SELECT apply_id, applied_at
-       FROM public.optimization_apply_batches
+       FROM public.apply_batches
        WHERE idempotency_key=$1
        LIMIT 1`,
       [idempotency_key]
     );
     if (existing.rowCount > 0) {
-      const items = await c.query(
-        `SELECT status FROM public.optimization_apply_items WHERE apply_id=$1`,
+      const itRes = await c.query(
+        `SELECT status FROM public.apply_items WHERE apply_id=$1`,
         [existing.rows[0].apply_id]
       );
-      const statuses = items.rows.map(x => x.status);
+      const statuses = itRes.rows.map(x => x.status);
       return {
         ok: true,
         execution_id,
@@ -261,43 +280,61 @@ export async function recordOptimizationsApplied(tenant_id, body) {
     await c.query('BEGIN');
     try {
       await c.query(
-        `INSERT INTO public.optimization_apply_batches(
-           apply_id, site_id, execution_id, mode, idempotency_key,
-           plugin, plugin_version, connector_used, applied_at, raw_payload
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::jsonb)`,
+        `INSERT INTO public.apply_batches(
+           apply_id, execution_id, site_id,
+           connector_used, mode,
+           idempotency_key, applied_at,
+           items_total, items_success, items_failed, items_skipped,
+           plugin, plugin_version, raw_payload
+         )
+         VALUES($1,$2,$3,$4,$5,$6,$7::timestamptz,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
         [
           apply_id,
-          site.id,
           execution_id,
+          site.id,
+          connector_used,
           mode,
           idempotency_key,
-          body.site.plugin,
-          body.site.plugin_version,
-          body.site.connector_used,
           applied_at,
+          counts.total,
+          counts.success,
+          counts.failed,
+          counts.skipped,
+          plugin,
+          plugin_version,
           JSON.stringify(body)
         ]
       );
 
-      const items = Array.isArray(body.items) ? body.items : [];
       for (const it of items) {
         await c.query(
-          `INSERT INTO public.optimization_apply_items(
-             apply_id, wp_id, entity_type, lang, status, applied_fields, wp_modified_gmt_after, error
-           ) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::timestamptz,$8::jsonb)`,
+          `INSERT INTO public.apply_items(
+             apply_id, execution_id, site_id,
+             wp_id, entity_type, lang,
+             status, applied_fields, wp_modified_gmt_after, error_payload
+           )
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::timestamptz,$10::jsonb)
+           ON CONFLICT (apply_id, wp_id, lang)
+           DO UPDATE SET
+             status=EXCLUDED.status,
+             applied_fields=EXCLUDED.applied_fields,
+             wp_modified_gmt_after=EXCLUDED.wp_modified_gmt_after,
+             error_payload=EXCLUDED.error_payload`,
           [
             apply_id,
+            execution_id,
+            site.id,
             it.wp_id,
             it.entity_type,
             it.lang,
             it.status,
-            JSON.stringify(it.applied_fields),
+            JSON.stringify(it.applied_fields || {}),
             it.wp_modified_gmt_after || null,
-            it.error ? JSON.stringify(it.error) : null
+            it.error_payload ? JSON.stringify(it.error_payload) : null
           ]
         );
 
-        // Update latest applied state on optimization_results (best-effort)
+        // Best-effort: update latest applied state on optimization_results
         await c.query(
           `UPDATE public.optimization_results
            SET applied_at = $5::timestamptz,
@@ -313,15 +350,15 @@ export async function recordOptimizationsApplied(tenant_id, body) {
             idempotency_key,
             it.status,
             applied_at,
-            JSON.stringify(it.applied_fields),
-            it.error ? JSON.stringify(it.error) : null,
+            JSON.stringify(it.applied_fields || {}),
+            it.error_payload ? JSON.stringify(it.error_payload) : null,
             it.wp_id,
             it.lang
           ]
         );
       }
 
-      // Mark execution applied_at (single timestamp)
+      // Mark execution applied_at
       await c.query(
         `UPDATE public.optimization_executions
          SET applied_at = COALESCE(applied_at, $2::timestamptz)
