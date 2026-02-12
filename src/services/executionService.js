@@ -181,3 +181,173 @@ export function buildApplyPayload({ site_url, ruleset, execution_id, results }) 
     results
   };
 }
+
+
+/**
+ * Record an "applied" confirmation coming from a CMS client (WordPress plugin).
+ * - Idempotent on apply_batch.idempotency_key
+ * - Writes batch + items
+ * - Updates optimization_results with latest applied_* fields
+ * - Marks optimization_executions.applied_at
+ */
+export async function recordOptimizationsApplied(tenant_id, body) {
+  if (!tenant_id) throw new Error('missing tenant_id');
+  const site_url = body?.site?.site_url;
+  const execution_id = body?.execution?.execution_id;
+  const applied_at = body?.execution?.applied_at;
+  const apply_id = body?.apply_batch?.apply_id;
+  const mode = body?.apply_batch?.mode;
+  const idempotency_key = body?.apply_batch?.idempotency_key;
+
+  return withClient(async (c) => {
+    // Resolve site under tenant
+    const siteRes = await c.query(
+      `SELECT s.id
+       FROM public.sites s
+       WHERE s.tenant_id=$1 AND s.site_url=$2
+       LIMIT 1`,
+      [tenant_id, site_url]
+    );
+    const site = siteRes.rows[0];
+    if (!site) {
+      const e = new Error('site_not_found');
+      e.code = 'site_not_found';
+      throw e;
+    }
+
+    // Ensure execution belongs to this site + tenant
+    const execRes = await c.query(
+      `SELECT e.execution_id
+       FROM public.optimization_executions e
+       WHERE e.execution_id=$1 AND e.site_id=$2
+       LIMIT 1`,
+      [execution_id, site.id]
+    );
+    if (execRes.rowCount === 0) {
+      const e = new Error('execution_not_found');
+      e.code = 'execution_not_found';
+      throw e;
+    }
+
+    // Idempotency: if batch already exists, return previous summary
+    const existing = await c.query(
+      `SELECT apply_id, applied_at
+       FROM public.optimization_apply_batches
+       WHERE idempotency_key=$1
+       LIMIT 1`,
+      [idempotency_key]
+    );
+    if (existing.rowCount > 0) {
+      const items = await c.query(
+        `SELECT status FROM public.optimization_apply_items WHERE apply_id=$1`,
+        [existing.rows[0].apply_id]
+      );
+      const statuses = items.rows.map(x => x.status);
+      return {
+        ok: true,
+        execution_id,
+        apply_id: existing.rows[0].apply_id,
+        idempotency_key,
+        already_recorded: true,
+        summary: {
+          items_total: statuses.length,
+          items_success: statuses.filter(s => s === 'success').length,
+          items_failed: statuses.filter(s => s === 'failed').length,
+          items_skipped: statuses.filter(s => s === 'skipped').length
+        }
+      };
+    }
+
+    await c.query('BEGIN');
+    try {
+      await c.query(
+        `INSERT INTO public.optimization_apply_batches(
+           apply_id, site_id, execution_id, mode, idempotency_key,
+           plugin, plugin_version, connector_used, applied_at, raw_payload
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::jsonb)`,
+        [
+          apply_id,
+          site.id,
+          execution_id,
+          mode,
+          idempotency_key,
+          body.site.plugin,
+          body.site.plugin_version,
+          body.site.connector_used,
+          applied_at,
+          JSON.stringify(body)
+        ]
+      );
+
+      const items = Array.isArray(body.items) ? body.items : [];
+      for (const it of items) {
+        await c.query(
+          `INSERT INTO public.optimization_apply_items(
+             apply_id, wp_id, entity_type, lang, status, applied_fields, wp_modified_gmt_after, error
+           ) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::timestamptz,$8::jsonb)`,
+          [
+            apply_id,
+            it.wp_id,
+            it.entity_type,
+            it.lang,
+            it.status,
+            JSON.stringify(it.applied_fields),
+            it.wp_modified_gmt_after || null,
+            it.error ? JSON.stringify(it.error) : null
+          ]
+        );
+
+        // Update latest applied state on optimization_results (best-effort)
+        await c.query(
+          `UPDATE public.optimization_results
+           SET applied_at = $5::timestamptz,
+               applied_status = $4,
+               applied_fields = $6::jsonb,
+               applied_error = $7::jsonb,
+               apply_id = $2,
+               idempotency_key = $3
+           WHERE execution_id=$1 AND wp_id=$8 AND lang=$9`,
+          [
+            execution_id,
+            apply_id,
+            idempotency_key,
+            it.status,
+            applied_at,
+            JSON.stringify(it.applied_fields),
+            it.error ? JSON.stringify(it.error) : null,
+            it.wp_id,
+            it.lang
+          ]
+        );
+      }
+
+      // Mark execution applied_at (single timestamp)
+      await c.query(
+        `UPDATE public.optimization_executions
+         SET applied_at = COALESCE(applied_at, $2::timestamptz)
+         WHERE execution_id=$1`,
+        [execution_id, applied_at]
+      );
+
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK');
+      throw e;
+    }
+
+    const statuses = items.map(x => x.status);
+    return {
+      ok: true,
+      execution_id,
+      apply_id,
+      idempotency_key,
+      already_recorded: false,
+      summary: {
+        items_total: statuses.length,
+        items_success: statuses.filter(s => s === 'success').length,
+        items_failed: statuses.filter(s => s === 'failed').length,
+        items_skipped: statuses.filter(s => s === 'skipped').length
+      }
+    };
+  });
+}

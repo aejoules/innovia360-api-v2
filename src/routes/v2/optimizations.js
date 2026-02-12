@@ -13,7 +13,8 @@ import {
   markExecutionDone,
   markExecutionFailed,
   upsertOptimizationResult,
-  buildApplyPayload
+  buildApplyPayload,
+  recordOptimizationsApplied
 } from '../../services/executionService.js';
 import { getExecutionQueue } from '../../queues/executionQueue.js';
 import { runPrepare } from '../../engine/prepareRunner.js';
