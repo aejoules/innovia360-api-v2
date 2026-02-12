@@ -1,261 +1,126 @@
-import { Worker } from 'bullmq';
-import { getRedis } from './queues/redis.js';
-import { SCAN_QUEUE_NAME } from './queues/scanQueue.js';
-import { EXECUTION_QUEUE_NAME } from './queues/executionQueue.js';
-import { logger } from './lib/logger.js';
-import { migrate } from './lib/migrate.js';
-import { withClient } from './lib/db.js';
-import { loadInventorySlice } from './services/inventoryService.js';
-import {
-  setExecutionStatus,
-  setExecutionProgress,
-  markExecutionDone,
-  markExecutionFailed,
-  upsertOptimizationResult,
-  buildApplyPayload
-} from './services/executionService.js';
-import { markScanStarted, markScanProgress, markScanDone, markScanFailed, insertScanResult, upsertScanKpis } from './services/scanService.js';
-import { runPrepare } from './engine/prepareRunner.js';
-import { crawlPublic } from './engine/crawler.js';
-import { scoreFromSignals } from './engine/utils.js';
+import { Worker, QueueEvents, Queue } from 'bullmq'
+import IORedis from 'ioredis'
+import pg from 'pg'
 
-if ((process.env.MIGRATE_ON_BOOT || 'true') === 'true') {
-  await migrate();
-}
+const {
+  REDIS_URL,
+  DATABASE_URL,
+  BULLMQ_PREFIX = 'bull',
+  SCAN_QUEUE = 'c360_scan_v2',
+  EXECUTION_QUEUE = 'innovia360_execution_v2'
+} = process.env
 
-const connection = getRedis();
-logger.info({ redis: 'connected', scan_queue: SCAN_QUEUE_NAME, execution_queue: EXECUTION_QUEUE_NAME }, 'bullmq config');
+const connection = new IORedis(REDIS_URL)
 
-async function fetchExecutionRequest(execution_id) {
-  return withClient(async (c) => {
-    const r = await c.query(
-      `SELECT execution_id, site_id, ruleset, request_payload
-       FROM public.optimization_executions
-       WHERE execution_id=$1
-       LIMIT 1`,
-      [execution_id]
-    );
-    return r.rows[0] || null;
-  });
-}
+const { Pool } = pg
+const pool = new Pool({ connectionString: DATABASE_URL })
 
-async function fetchSite(site_id) {
-  return withClient(async (c) => {
-    const r = await c.query('SELECT id, site_url FROM public.sites WHERE id=$1 LIMIT 1', [site_id]);
-    return r.rows[0] || null;
-  });
-}
+console.log({
+  redis: 'connected',
+  scan_queue: SCAN_QUEUE,
+  execution_queue: EXECUTION_QUEUE,
+  msg: 'bullmq config'
+})
 
-async function fetchScanJob(job_id) {
-  return withClient(async (c) => {
-    const r = await c.query(
-      `SELECT job_id, site_id, type, scope
-       FROM public.scan_jobs
-       WHERE job_id=$1
-       LIMIT 1`,
-      [job_id]
-    );
-    return r.rows[0] || null;
-  });
-}
+/* ===============================
+   HEARTBEAT (toutes les 30s)
+================================= */
+async function heartbeat(queue) {
+  try {
+    const counts = await queue.getJobCounts()
 
-async function doExecutionPrepare(execution_id) {
-  const ex = await fetchExecutionRequest(execution_id);
-  if (!ex) throw new Error('execution_not_found');
+    const { rows } = await pool.query(
+      `select count(*) as queued
+       from optimization_executions
+       where status='queued'`
+    )
 
-  const site = await fetchSite(ex.site_id);
-  if (!site) throw new Error('site_not_found');
-
-  const req = ex.request_payload || {};
-  const scope = req.scope || {};
-  const filters = req.filters || {};
-  const rawInventory = await loadInventorySlice(ex.site_id, scope, filters);
-  const inventory = (req.focus_keyword && typeof req.focus_keyword === 'string')
-    ? rawInventory.map((it) => ({ ...it, focus_keyword: req.focus_keyword }))
-    : rawInventory;
-
-  await setExecutionStatus(execution_id, 'running', 1);
-
-  const results = await runPrepare({
-    site_url: req.site_url || site.site_url,
-    ruleset: ex.ruleset,
-    inventory,
-    site_samples: req.site_samples || [],
-    focus_keyword: req.focus_keyword || null,
-    onProgress: async (done, total) => {
-      const p = Math.max(1, Math.min(99, Math.floor((done / total) * 95)));
-      await setExecutionProgress(execution_id, p);
-    }
-  });
-
-  for (const row of results) {
-    await upsertOptimizationResult(execution_id, ex.site_id, {
-      wp_id: row.wp_id,
-      entity_type: row.entity_type,
-      post_type: row.post_type,
-      status: row.status,
-      lang: row.lang,
-      decision: row.decision,
-      public_source: row.public_source,
-      before: row.before,
-      after: row.after,
-      diff: row.diff,
-      apply: row.apply
-    });
+    console.log({
+      msg: 'worker heartbeat',
+      waiting: counts.waiting,
+      active: counts.active,
+      completed: counts.completed,
+      failed: counts.failed,
+      dbQueued: rows[0].queued
+    })
+  } catch (err) {
+    console.error('heartbeat error', err.message)
   }
-
-  const applyPayload = buildApplyPayload({ site_url: req.site_url || site.site_url, ruleset: ex.ruleset, execution_id, results });
-  await markExecutionDone(execution_id, applyPayload, {
-    items_total: applyPayload.summary.items_total,
-    items_allowed: applyPayload.summary.items_allowed
-  });
 }
 
-async function doScan(job_id) {
-  const scan = await fetchScanJob(job_id);
-  if (!scan) throw new Error('scan_not_found');
+/* ===============================
+   JOB PROCESSOR
+================================= */
 
-  await markScanStarted(job_id);
+const executionQueue = new Queue(EXECUTION_QUEUE, {
+  connection,
+  prefix: BULLMQ_PREFIX
+})
 
-  const scope = scan.scope || {};
-  const inventory = await loadInventorySlice(scan.site_id, scope, { limit: scope.limit || 500 });
+const worker = new Worker(
+  EXECUTION_QUEUE,
+  async job => {
+    const start = Date.now()
+    console.log({ msg: 'job received', execution_id: job.data.execution_id })
 
-  const total = inventory.length || 1;
-  let sumScore = 0;
-  let indexableCount = 0;
-  let seen = 0;
-
-  for (let i = 0; i < inventory.length; i++) {
-    const e = inventory[i];
-    let crawl;
     try {
-      crawl = await crawlPublic(e.permalink);
-    } catch (err) {
-      await insertScanResult(job_id, scan.site_id, {
-        wp_id: e.wp_id,
-        lang: e.lang,
-        entity_type: e.entity_type,
-        url: e.permalink,
-        http_status: 0,
-        indexable: false,
-        metrics: { error: String(err?.message || err) },
-        issues: [{ code: 'crawl_failed' }],
-        score: 0
-      });
-      seen += 1;
-      await markScanProgress(job_id, Math.min(99, Math.floor((seen / total) * 95)));
-      continue;
-    }
+      const executionId = job.data.execution_id
 
-    const { score, issues } = scoreFromSignals(crawl.signals);
-    sumScore += score;
-    if (crawl.signals.indexable) indexableCount += 1;
-    seen += 1;
-
-    await insertScanResult(job_id, scan.site_id, {
-      wp_id: e.wp_id,
-      lang: e.lang,
-      entity_type: e.entity_type,
-      url: crawl.url,
-      http_status: crawl.http_status,
-      indexable: crawl.signals.indexable,
-      metrics: { ...crawl.signals, timing_ms: crawl.timing_ms },
-      issues,
-      score
-    });
-
-    await markScanProgress(job_id, Math.min(99, Math.floor((seen / total) * 95)));
-  }
-
-  const avgScore = inventory.length ? Math.round(sumScore / inventory.length) : 0;
-  const indexableRate = inventory.length ? Math.round((indexableCount / inventory.length) * 100) : 0;
-
-  await upsertScanKpis(job_id, scan.site_id, {
-    entities_seen: inventory.length,
-    avg_score: avgScore,
-    indexable_rate: indexableRate
-  });
-
-  await markScanDone(job_id);
-}
-
-// Workers
-new Worker(SCAN_QUEUE_NAME, async (job) => {
-  const { job_id } = job.data || {};
-  try {
-    await doScan(job_id);
-    return { ok: true };
-  } catch (err) {
-    logger.error({ err, job_id }, 'scan failed');
-    await markScanFailed(job_id, { code: 'scan_failed', message: String(err?.message || err) });
-    throw err;
-  }
-}, { connection, concurrency: Number(process.env.SCAN_CONCURRENCY || 2) });
-
-new Worker(EXECUTION_QUEUE_NAME, async (job) => {
-  const { execution_id } = job.data || {};
-  try {
-    await doExecutionPrepare(execution_id);
-    return { ok: true };
-  } catch (err) {
-    logger.error({ err, execution_id }, 'execution failed');
-    await markExecutionFailed(execution_id, { code: 'execution_failed', message: String(err?.message || err) });
-    throw err;
-  }
-}, { connection, concurrency: Number(process.env.EXECUTION_CONCURRENCY || 2) });
-
-// DB fallback poller: if Redis/BullMQ jobs are not delivered (e.g., eviction policy allkeys-lru),
-// we still progress executions by claiming queued rows from Postgres.
-// Enable with DB_FALLBACK_ENABLED=true (default true).
-const DB_FALLBACK_ENABLED = (process.env.DB_FALLBACK_ENABLED ?? 'true') !== 'false';
-const DB_FALLBACK_INTERVAL_MS = Number(process.env.DB_FALLBACK_INTERVAL_MS || 5000);
-const DB_FALLBACK_BATCH = Number(process.env.DB_FALLBACK_BATCH || 1);
-
-async function claimQueuedExecutions(limit = 1) {
-  return withClient(async (c) => {
-    // Use SKIP LOCKED to avoid multi-worker collisions
-    const q = `
-      WITH picked AS (
-        SELECT execution_id
-        FROM public.optimization_executions
-        WHERE status='queued'
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT $1
+      await pool.query(
+        `update optimization_executions
+         set status='running'
+         where execution_id=$1`,
+        [executionId]
       )
-      UPDATE public.optimization_executions e
-      SET status='running',
-          started_at=COALESCE(started_at, now()),
-          progress=GREATEST(COALESCE(progress,0), 1)
-      FROM picked
-      WHERE e.execution_id = picked.execution_id
-      RETURNING e.execution_id
-    `;
-    const r = await c.query(q, [limit]);
-    return r.rows.map(x => x.execution_id);
-  });
-}
 
-async function dbFallbackTick() {
-  try {
-    const ids = await claimQueuedExecutions(DB_FALLBACK_BATCH);
-    for (const execution_id of ids) {
-      try {
-        await doExecutionPrepare(execution_id);
-        // doExecutionPrepare is expected to mark done/failed internally.
-      } catch (err) {
-        logger.error({ err, execution_id }, 'db fallback execution failed');
-        await markExecutionFailed(execution_id, { code: 'execution_failed', message: String(err?.message || err) });
-      }
+      // >>> ICI ton traitement IA réel <<<
+      // simulate work
+      await new Promise(resolve => setTimeout(resolve, 3000))
+
+      await pool.query(
+        `update optimization_executions
+         set status='done', progress=100, ended_at=now()
+         where execution_id=$1`,
+        [executionId]
+      )
+
+      console.log({
+        msg: 'job completed',
+        execution_id: executionId,
+        duration_ms: Date.now() - start
+      })
+
+    } catch (err) {
+      console.error({
+        msg: 'job failed',
+        execution_id: job.data.execution_id,
+        error: err.message
+      })
+
+      await pool.query(
+        `update optimization_executions
+         set status='failed'
+         where execution_id=$1`,
+        [job.data.execution_id]
+      )
     }
-  } catch (err) {
-    logger.warn({ err }, 'db fallback tick failed');
+  },
+  {
+    connection,
+    prefix: BULLMQ_PREFIX
   }
-}
+)
 
-if (DB_FALLBACK_ENABLED) {
-  setInterval(dbFallbackTick, DB_FALLBACK_INTERVAL_MS);
-  logger.info({ DB_FALLBACK_INTERVAL_MS, DB_FALLBACK_BATCH }, 'db fallback poller enabled');
-}
+worker.on('error', err => {
+  console.error('Worker error:', err)
+})
 
-logger.info('worker started');
+console.log({ msg: 'worker started' })
+
+/* ===============================
+   HEARTBEAT LOOP
+================================= */
+
+setInterval(() => {
+  heartbeat(executionQueue)
+}, 30000)
